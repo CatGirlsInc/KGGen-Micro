@@ -8,10 +8,11 @@ This is an experimental benchmark, not a production knowledge-graph service. The
 
 ### Pinned environment
 
-The project uses CPython 3.13.15, `kg-gen==0.4.0`, `dspy-ai==3.4.0`, and `datasets==4.4.1`. `uv.lock` pins their transitive dependencies. Install the environment with:
+The project uses the CPython 3.13.15 interpreter selected by `.python-version`, plus `kg-gen==0.4.0`, `dspy-ai==3.4.0`, and `datasets==4.4.1`. `uv.lock` pins their transitive dependencies. Let `uv` install the selected interpreter and sync the environment with:
 
 ```bash
-uv sync --python 3.13
+uv python install
+uv sync --locked
 uv run scripts/prepare_pilot.py
 ```
 
@@ -27,7 +28,7 @@ ollama create kggen-qwen25-7b:Q4_K_M -f config/Modelfile
 uv run scripts/run_pilot.py --limit 1
 ```
 
-Omit `--limit 1` to attempt all 10 fixed records. Override the model with `--model MODEL_TAG` or `KGGEN_MODEL`; set `OLLAMA_HOST` when the server is not at `http://localhost:11434`. Runs are written under ignored `runs/` with the model digest, settings, record-level status/timing/RSS, sampled GPU memory, graph JSON, KGGen log, and full tracebacks for failures. Failed records remain visible in the summary and do not stop later records.
+Omit `--limit 1` to attempt all 10 fixed records. Override the model with `--model MODEL_TAG` or `KGGEN_MODEL`; set `OLLAMA_HOST` when the server is not at `http://localhost:11434`. Runs are written under ignored `runs/` with the model digest, settings, record-level status/timing/RSS, sampled GPU memory, graph JSON, KGGen log, and full tracebacks for failures. Failed records remain visible in the summary and do not stop later records. The runner explicitly unloads its selected model in a `finally` cleanup path and records the result in `run.json`; the model files remain installed on disk for subsequent runs. Other Ollama models are left untouched.
 
 With DSPy 3.4.0, its default `lm15` engine returned HTTP 404 for this Ollama endpoint even though both Ollama chat endpoints were healthy. The runner explicitly selects DSPy's `litellm` engine, which completed a direct local chat test and the KGGen run below. The original MINE evaluator is separate: upstream `_1_evaluation.py` configures `openai/gpt-5` and requires `OPENAI_API_KEY`; local graph generation alone does not produce a paper-comparable MINE score. The published dataset includes essays, generated queries, and reference KG/evaluation fields, but this setup does not run or substitute for the hosted evaluator.
 
