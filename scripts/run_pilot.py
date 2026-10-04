@@ -5,6 +5,7 @@ import os
 import platform
 import resource
 import subprocess
+import threading
 import time
 import traceback
 import urllib.request
@@ -56,6 +57,75 @@ def gpu_memory():
         return None
 
 
+def system_memory():
+    try:
+        values = {}
+        with open("/proc/meminfo", encoding="utf-8") as memory_info:
+            for line in memory_info:
+                key, value = line.split(":", 1)
+                if key in {"MemTotal", "MemAvailable"}:
+                    values[key] = int(value.strip().split()[0])
+        return {
+            "total_kib": values["MemTotal"],
+            "available_kib": values["MemAvailable"],
+            "used_kib": values["MemTotal"] - values["MemAvailable"],
+        }
+    except (OSError, KeyError, ValueError):
+        return None
+
+
+class ResourceMonitor:
+    def __init__(self, interval_seconds=1):
+        self.interval_seconds = interval_seconds
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._sample_loop, daemon=True)
+        self.peak_gpu_used_mib = None
+        self.gpu_total_mib = None
+        self.peak_system_used_kib = None
+        self.minimum_system_available_kib = None
+
+    def _sample(self):
+        memory = system_memory()
+        if memory is not None:
+            used = memory["used_kib"]
+            available = memory["available_kib"]
+            self.peak_system_used_kib = max(self.peak_system_used_kib or 0, used)
+            if self.minimum_system_available_kib is None:
+                self.minimum_system_available_kib = available
+            else:
+                self.minimum_system_available_kib = min(
+                    self.minimum_system_available_kib, available
+                )
+
+        gpu = gpu_memory()
+        if gpu:
+            try:
+                used_mib, total_mib = (int(value.strip()) for value in gpu.split(","))
+                self.peak_gpu_used_mib = max(self.peak_gpu_used_mib or 0, used_mib)
+                self.gpu_total_mib = total_mib
+            except ValueError:
+                pass
+
+    def _sample_loop(self):
+        while not self._stop.is_set():
+            self._sample()
+            self._stop.wait(self.interval_seconds)
+
+    def start(self):
+        self._thread.start()
+
+    def stop(self):
+        self._stop.set()
+        self._thread.join()
+        return {
+            "sampling_interval_seconds": self.interval_seconds,
+            "peak_gpu_used_mib": self.peak_gpu_used_mib,
+            "gpu_total_mib": self.gpu_total_mib,
+            "peak_system_used_kib": self.peak_system_used_kib,
+            "minimum_system_available_kib": self.minimum_system_available_kib,
+        }
+
+
 def main():
     parser = argparse.ArgumentParser(description="Run the fixed MINE pilot locally")
     parser.add_argument("--model", default=os.getenv("KGGEN_MODEL", DEFAULT_MODEL))
@@ -71,10 +141,12 @@ def main():
         raise ValueError("--limit must be between 1 and 10")
 
     host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+    ollama_version = ollama_json(host, "/api/version").get("version")
     tags = ollama_json(host, "/api/tags")["models"]
     model_info = next((item for item in tags if item["name"] == args.model), None)
     if model_info is None:
         raise RuntimeError(f"Model {args.model!r} is not installed in Ollama")
+    lm_options = {"think": False} if args.model.startswith("qwen3.5:") else {}
 
     stamp = args.run_id or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     output = Path("runs") / f"{stamp}-{args.model.replace(':', '-')}"
@@ -95,9 +167,11 @@ def main():
         "model": args.model,
         "model_digest": model_info.get("digest"),
         "ollama_host": host,
+        "ollama_version": ollama_version,
         "temperature": 0,
         "seed": 42,
         "context_length": 4096,
+        "model_specific_options": lm_options,
         "python": platform.python_version(),
         "platform": platform.platform(),
         "started_at": datetime.now(timezone.utc).isoformat(),
@@ -107,6 +181,8 @@ def main():
 
     outcomes = []
     unload_status = "not_attempted"
+    resource_monitor = ResourceMonitor()
+    resource_monitor.start()
     try:
         kg = KGGen(
             model=f"ollama_chat/{args.model}",
@@ -120,6 +196,7 @@ def main():
             max_tokens=4096,
             api_base=host,
             engine="litellm",
+            **lm_options,
         )
         for record in records[: args.limit]:
             started = time.perf_counter()
@@ -162,11 +239,13 @@ def main():
         except Exception as error:
             unload_status = f"failed: {type(error).__name__}: {error}"
             print(f"Ollama model cleanup failed: {unload_status}")
+    resource_peaks = resource_monitor.stop()
 
     summary = {
         **settings,
         "completed_at": datetime.now(timezone.utc).isoformat(),
         "gpu_memory_after_mib": gpu_memory(),
+        "resource_peaks": resource_peaks,
         "model_unload_status": unload_status,
         "attempted": len(outcomes),
         "succeeded": sum(item["status"] == "succeeded" for item in outcomes),

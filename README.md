@@ -46,15 +46,37 @@ Hardware observed on 2026-10-04: AMD Ryzen 7 3700X, GeForce RTX 2080 with 8 GiB 
 
 ## Candidate Models
 
-| Model | Approx. Ollama download size | Role |
-| --- | ---: | --- |
-| Qwen3.5 4B | 3.4 GB | Primary small-model candidate |
-| Gemma 4 E2B | 4.6–7.5 GB | Architecture comparison |
-| Ministral 3 3B | 3.0 GB | Compact structured-output candidate |
-| Phi-4-mini 3.8B | 2.5 GB | Optional lightweight baseline |
-| Qwen3.5 9B | 6.6 GB | Stretch candidate; test only if it fits the hardware budget |
+| Model | Pinned Ollama tag | Approx. download size | Role |
+| --- | --- | ---: | --- |
+| Qwen3.5 4B | `qwen3.5:4b-q4_K_M` | 3.3 GB | Primary small-model candidate |
+| Gemma 4 E2B | `gemma4:e2b-it-q4_K_M` | 4.6 GB | Architecture comparison |
+| Ministral 3 3B | `ministral-3:3b-instruct-2512-q4_K_M` | 3.0 GB | Compact structured-output candidate |
+| Phi-4-mini 3.8B | `phi4-mini:3.8b-q4_K_M` | 2.5 GB | Optional lightweight baseline |
+| Qwen3.5 9B | `qwen3.5:9b-q4_K_M` | 6.6 GB | Stretch candidate; test only if it fits the hardware budget |
 
 Download sizes are approximate, not a guarantee of runtime fit. Final selection depends on measured peak VRAM/RAM and compatibility with every required KGGen stage. Use identical generation settings where supported and record any model-specific deviations.
+
+### CAT-79 Compatibility Screening
+
+On 2026-10-04, the pinned tags were screened on MINE record 24 using KGGen 0.4.0, `cluster=True`, chunk size 3000, temperature 0, seed 42, and a 4096-token context. Each completed call exercised extraction, relation generation, clustering, and structured graph output. The resource monitor samples global GPU and host memory once per second from model initialization through unload; process peak RSS is also recorded separately. These are single-record compatibility checks, not the full 10-record pilot or a quality comparison.
+
+| Candidate | Result on record 24 | Elapsed | Peak GPU memory | Peak host memory | Notes |
+| --- | --- | ---: | ---: | ---: | --- |
+| Qwen3.5 4B Q4_K_M | Passed | 188.7 s | 4379 / 8192 MiB | 11.4 / 15 GiB | Ollama `think=false` required because reasoning otherwise appeared only in `reasoning_content`, leaving DSPy with an empty response. |
+| Gemma 4 E2B Q4_K_M | Passed | 277.5 s | 3654 / 8192 MiB | 11.3 / 15 GiB | No model-specific options. |
+| Ministral 3 3B Q4_K_M | Passed | 341.0 s | 4107 / 8192 MiB | 10.9 / 15 GiB | No model-specific options. |
+| Phi-4-mini 3.8B Q4_K_M | Passed | 65.8 s | 3694 / 8192 MiB | 11.0 / 15 GiB | No model-specific options. |
+
+All four completed candidates fit within the 8 GiB VRAM and 16 GiB system RAM ceilings in this screening. These results confirm compatibility only on record 24; run the same fixed 10 records per selected model before comparing reliability or quality. The benchmark host reported Ollama server version 0.32.15. New run settings also record the server version. The run-specific settings, model digests, graphs, logs, and resource measurements are in the ignored `runs/` directory on the benchmark machine.
+
+To repeat a one-record check with peak sampling:
+
+```bash
+uv run scripts/run_pilot.py --model qwen3.5:4b-q4_K_M --limit 1
+uv run scripts/run_pilot.py --model gemma4:e2b-it-q4_K_M --limit 1
+uv run scripts/run_pilot.py --model ministral-3:3b-instruct-2512-q4_K_M --limit 1
+uv run scripts/run_pilot.py --model phi4-mini:3.8b-q4_K_M --limit 1
+```
 
 ## Evaluation
 
