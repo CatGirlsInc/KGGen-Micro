@@ -1,0 +1,13 @@
+[project]
+name = "kggen-micro"
+version = "0.1.0"
+description = "Reproducible local KGGen MINE pilot"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "datasets==4.4.1",
+    "dspy-ai==3.4.0",
+    "kg-gen==0.4.0",
+]
+
+[tool.uv]
+package = false
