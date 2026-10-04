@@ -159,6 +159,12 @@ ENV/
 env.bak/
 venv.bak/
 
+# Local benchmark downloads, caches, and generated run artifacts
+/data/downloads/
+/data/cache/
+/outputs/
+/runs/
+
 # Spyder project settings
 .spyderproject
 .spyproject
