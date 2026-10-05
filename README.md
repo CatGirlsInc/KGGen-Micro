@@ -125,6 +125,8 @@ If the published evaluation depends on an inaccessible hosted model, keep two re
 
 Manually inspect representative graphs for incorrect entity merges, missing relationships, and unsupported extractions. Preserve failed outputs and logs; do not silently omit unsuccessful runs from comparisons.
 
+The completed CAT-80 comparison is in [reports/cat80-evaluation.md](reports/cat80-evaluation.md). It separates the unavailable original MINE evaluation from a local Qwen2.5-judged comparison and reports operational metrics, graph-size/clustering measurements, failures, manual inspection, and a bounded recommendation. Recompute operational summaries with `uv run scripts/summarize_runs.py RUN_DIR...`; reproduce the local judgment with `uv run scripts/evaluate_local.py RUN_DIR... --run-id RUN_ID` after installing the recorded evaluator model in Ollama. Local judgments are not paper-comparable MINE scores.
+
 ## Reproducibility and Deliverables
 
 The benchmark should leave enough information for another person to repeat and interpret each run:
@@ -135,7 +137,7 @@ The benchmark should leave enough information for another person to repeat and i
 - Intermediate extractions, final graphs, evaluation outputs, resource measurements, and error logs, organized by run/model.
 - A comparison report that states the evaluator used, methodology deviations, model exclusions, quality/resource trade-offs, recommendation, and full-benchmark decision.
 
-The CAT-78 pilot execution is complete for four compatible models on the same 10 records. Runtime, memory, success, and failure results are reported above. Quality evaluation remains open: the original hosted evaluator was not run, and no substitute evaluator was introduced, so these execution results do not establish relative graph quality.
+The CAT-78 pilot execution and a separate CAT-80 local-judge evaluation are complete for four compatible models on the same 10 records. The original hosted MINE evaluator was not run, so no paper-comparable MINE score or validated relative-quality conclusion is available. The local-judge ranking is provisional and its limitations and recommendation are documented in the CAT-80 report.
 
 ## References
 
