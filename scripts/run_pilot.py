@@ -74,6 +74,67 @@ def system_memory():
         return None
 
 
+def install_kggen_cluster_progress_guard():
+    from importlib import import_module
+
+    cluster_module = import_module("kg_gen.steps._3_cluster_graph")
+    if getattr(cluster_module, "_kggen_micro_progress_guard", False):
+        return
+
+    def cluster_items_with_progress(dspy_runtime, items, item_type="entities", context=""):
+        context = f"{item_type} of a graph extracted from source text." + context
+        remaining_items = items.copy()
+        clusters = []
+        no_progress_count = 0
+        validate = None
+
+        while remaining_items and no_progress_count < cluster_module.LOOP_N:
+            extract_signature, _ = cluster_module.get_extract_cluster_sig(items)
+            extract = dspy_runtime.Predict(extract_signature)
+            suggested_cluster = set(
+                extract(items=remaining_items, context=context).cluster
+            ) & remaining_items
+            if not suggested_cluster:
+                no_progress_count += 1
+                continue
+
+            validate_signature, _ = cluster_module.get_validate_cluster_sig(
+                suggested_cluster
+            )
+            validate = dspy_runtime.Predict(validate_signature)
+            validated_cluster = set(
+                validate(cluster=suggested_cluster, context=context).validated_items
+            ) & suggested_cluster & remaining_items
+            if not validated_cluster:
+                no_progress_count += 1
+                continue
+
+            representative = cluster_module.choose_rep(
+                cluster=validated_cluster, context=context
+            ).representative
+            clusters.append(
+                cluster_module.Cluster(
+                    representative=representative, members=validated_cluster
+                )
+            )
+            remaining_items.difference_update(validated_cluster)
+            no_progress_count = 0
+
+        if remaining_items:
+            items_to_process = list(remaining_items)
+            for start in range(0, len(items_to_process), cluster_module.BATCH_SIZE):
+                batch = items_to_process[
+                    start : start + cluster_module.BATCH_SIZE
+                ]
+                cluster_module._process_batch(batch, clusters, context, validate)
+
+        final_clusters = {cluster.representative: cluster.members for cluster in clusters}
+        return set(final_clusters), final_clusters
+
+    cluster_module.cluster_items = cluster_items_with_progress
+    cluster_module._kggen_micro_progress_guard = True
+
+
 class ResourceMonitor:
     def __init__(self, interval_seconds=1):
         self.interval_seconds = interval_seconds
@@ -128,28 +189,82 @@ class ResourceMonitor:
 
 def main():
     parser = argparse.ArgumentParser(description="Run the fixed MINE pilot locally")
-    parser.add_argument("--model", default=os.getenv("KGGEN_MODEL", DEFAULT_MODEL))
+    parser.add_argument(
+        "--model", help="Ollama model tag; defaults to KGGEN_MODEL or the pilot model"
+    )
     parser.add_argument("--limit", type=int, help="Run only the first N fixed pilot records")
     parser.add_argument("--run-id", help="Stable output directory name")
+    parser.add_argument(
+        "--cluster",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable or disable graph clustering (default: saved setting or enabled)",
+    )
+    parser.add_argument(
+        "--settings",
+        type=Path,
+        help="Replay model and parameters from a saved settings.json or run.json",
+    )
     args = parser.parse_args()
 
     pilot = json.loads(PILOT.read_text(encoding="utf-8"))
-    records = pilot["records"]
-    if len(records) != 10:
-        raise ValueError(f"Expected exactly 10 fixed records, found {len(records)}")
-    if args.limit is not None and not 1 <= args.limit <= len(records):
-        raise ValueError("--limit must be between 1 and 10")
+    pilot_records = pilot["records"]
+    if len(pilot_records) != 10:
+        raise ValueError(f"Expected exactly 10 fixed records, found {len(pilot_records)}")
+    saved_settings = (
+        json.loads(args.settings.read_text(encoding="utf-8")) if args.settings else {}
+    )
+    if args.settings and args.model:
+        parser.error("--model cannot be combined with --settings")
+    if args.settings and (
+        saved_settings.get("dataset_revision") != pilot["revision"]
+        or saved_settings.get("dataset") != pilot["dataset"]
+    ):
+        raise ValueError("Saved settings refer to a different pilot dataset revision")
 
-    host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+    if args.settings:
+        saved_ids = saved_settings.get("record_ids")
+        records_by_id = {record["id"]: record for record in pilot_records}
+        if (
+            not isinstance(saved_ids, list)
+            or not saved_ids
+            or any(not isinstance(record_id, int) or record_id not in records_by_id for record_id in saved_ids)
+            or len(saved_ids) != len(set(saved_ids))
+        ):
+            raise ValueError("Saved settings contain invalid pilot record IDs")
+        records = [records_by_id[record_id] for record_id in saved_ids]
+    else:
+        records = pilot_records
+    model = saved_settings.get("model") if args.settings else None
+    model = model or args.model or os.getenv("KGGEN_MODEL", DEFAULT_MODEL)
+    temperature = saved_settings.get("temperature", 0)
+    seed = saved_settings.get("seed", 42)
+    context_length = saved_settings.get("context_length", 4096)
+    max_tokens = saved_settings.get("max_tokens", context_length)
+    dspy_num_retries = saved_settings.get("dspy_num_retries", 3)
+    chunk_size = saved_settings.get("chunk_size", 3000)
+    cluster = saved_settings.get("cluster", True) if args.cluster is None else args.cluster
+    lm_options = saved_settings.get("model_specific_options")
+    if lm_options is None:
+        lm_options = {"think": False} if model.startswith("qwen3.5:") else {}
+    if args.limit is not None and not 1 <= args.limit <= len(records):
+        raise ValueError(f"--limit must be between 1 and {len(records)}")
+    records = records[: args.limit]
+
+    host = os.getenv(
+        "OLLAMA_HOST", saved_settings.get("ollama_host", "http://localhost:11434")
+    )
     ollama_version = ollama_json(host, "/api/version").get("version")
     tags = ollama_json(host, "/api/tags")["models"]
-    model_info = next((item for item in tags if item["name"] == args.model), None)
+    model_info = next((item for item in tags if item["name"] == model), None)
     if model_info is None:
-        raise RuntimeError(f"Model {args.model!r} is not installed in Ollama")
-    lm_options = {"think": False} if args.model.startswith("qwen3.5:") else {}
+        raise RuntimeError(f"Model {model!r} is not installed in Ollama")
+    expected_digest = saved_settings.get("model_digest")
+    if args.settings and expected_digest and model_info.get("digest") != expected_digest:
+        raise RuntimeError("Installed model digest differs from the saved settings")
 
     stamp = args.run_id or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    output = Path("runs") / f"{stamp}-{args.model.replace(':', '-')}"
+    output = Path("runs") / f"{stamp}-{model.replace(':', '-')}"
     output.mkdir(parents=True, exist_ok=False)
     logging.basicConfig(
         level=logging.INFO,
@@ -164,13 +279,18 @@ def main():
         "dataset_revision": pilot["revision"],
         "pilot_seed": pilot["seed"],
         "record_ids": [record["id"] for record in records],
-        "model": args.model,
+        "model": model,
         "model_digest": model_info.get("digest"),
         "ollama_host": host,
         "ollama_version": ollama_version,
-        "temperature": 0,
-        "seed": 42,
-        "context_length": 4096,
+        "temperature": temperature,
+        "seed": seed,
+        "context_length": context_length,
+        "max_tokens": max_tokens,
+        "dspy_num_retries": dspy_num_retries,
+        "chunk_size": chunk_size,
+        "cluster": cluster,
+        "dspy_engine": "litellm",
         "model_specific_options": lm_options,
         "python": platform.python_version(),
         "platform": platform.platform(),
@@ -184,40 +304,62 @@ def main():
     resource_monitor = ResourceMonitor()
     resource_monitor.start()
     try:
+        install_kggen_cluster_progress_guard()
         kg = KGGen(
-            model=f"ollama_chat/{args.model}",
-            temperature=0,
+            model=f"ollama_chat/{model}",
+            temperature=temperature,
             api_base=host,
-            max_tokens=4096,
+            max_tokens=max_tokens,
         )
         kg.lm = dspy.LM(
-            model=f"ollama_chat/{args.model}",
-            temperature=0,
-            max_tokens=4096,
+            model=f"ollama_chat/{model}",
+            temperature=temperature,
+            max_tokens=max_tokens,
+            num_retries=dspy_num_retries,
+            num_ctx=context_length,
             api_base=host,
             engine="litellm",
+            seed=seed,
             **lm_options,
         )
-        for record in records[: args.limit]:
+        for record in records:
             started = time.perf_counter()
             result = {
                 "record_id": record["id"],
                 "topic": record["topic"],
                 "status": "failed",
             }
+            intermediate_dir = output / f"intermediate_{record['id']}"
             try:
-                graph = kg.generate(
+                result["stage"] = "extraction"
+                extraction_started = time.perf_counter()
+                extracted_graph = kg.generate(
                     input_data=record["text"],
                     context=record["topic"],
-                    chunk_size=3000,
-                    cluster=True,
+                    chunk_size=chunk_size,
+                    cluster=False,
+                    output_folder=str(intermediate_dir),
                 )
+                result["extraction_elapsed_seconds"] = round(
+                    time.perf_counter() - extraction_started, 3
+                )
+                result["intermediate"] = str(intermediate_dir / "graph.json")
+                if cluster:
+                    result["stage"] = "clustering"
+                    clustering_started = time.perf_counter()
+                    graph = kg.cluster(extracted_graph, context=record["topic"])
+                    result["clustering_elapsed_seconds"] = round(
+                        time.perf_counter() - clustering_started, 3
+                    )
+                else:
+                    graph = extracted_graph
                 graph_path = output / f"graph_{record['id']}.json"
                 graph_path.write_text(
                     json.dumps(graph.model_dump(mode="json"), indent=2) + "\n",
                     encoding="utf-8",
                 )
                 result["status"] = "succeeded"
+                result.pop("stage")
                 result["graph"] = graph_path.name
             except Exception as error:
                 result["error"] = f"{type(error).__name__}: {error}"
@@ -234,7 +376,7 @@ def main():
             print(f"record {record['id']}: {result['status']} ({result['elapsed_seconds']}s)")
     finally:
         try:
-            unload_ollama_model(host, args.model)
+            unload_ollama_model(host, model)
             unload_status = "succeeded"
         except Exception as error:
             unload_status = f"failed: {type(error).__name__}: {error}"

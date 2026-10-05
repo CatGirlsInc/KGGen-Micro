@@ -28,7 +28,13 @@ ollama create kggen-qwen25-7b:Q4_K_M -f config/Modelfile
 uv run scripts/run_pilot.py --limit 1
 ```
 
-Omit `--limit 1` to attempt all 10 fixed records. Override the model with `--model MODEL_TAG` or `KGGEN_MODEL`; set `OLLAMA_HOST` when the server is not at `http://localhost:11434`. Runs are written under ignored `runs/` with the model digest, settings, record-level status/timing/RSS, sampled GPU memory, graph JSON, KGGen log, and full tracebacks for failures. Failed records remain visible in the summary and do not stop later records. The runner explicitly unloads its selected model in a `finally` cleanup path and records the result in `run.json`; the model files remain installed on disk for subsequent runs. Other Ollama models are left untouched.
+Omit `--limit 1` to attempt all 10 fixed records. Override the model with `--model MODEL_TAG` or `KGGEN_MODEL`; set `OLLAMA_HOST` when the server is not at `http://localhost:11434`. To replay a saved run configuration and its recorded pilot record IDs, pass either its `settings.json` or `run.json`:
+
+```bash
+uv run scripts/run_pilot.py --settings runs/RUN_ID/settings.json
+```
+
+Use `--limit N` with replay for a partial rerun; `--run-id` can assign a stable, new output directory. Replay verifies that the dataset revision and installed model digest match the saved configuration. Use `--no-cluster` only for extraction diagnostics; the effective setting is recorded, and such a run is not a complete pilot result. Runs are written under ignored `runs/` with the model digest, effective settings, record-level status/timing/RSS, sampled GPU memory, final graph JSON, per-record KGGen intermediate extraction (`intermediate_ID/graph.json`), KGGen log, and full tracebacks for failures. Failed records remain visible in the summary and do not stop later records. The runner explicitly unloads its selected model in a `finally` cleanup path and records the result in `run.json`; the model files remain installed on disk for subsequent runs. Other Ollama models are left untouched.
 
 With DSPy 3.4.0, its default `lm15` engine returned HTTP 404 for this Ollama endpoint even though both Ollama chat endpoints were healthy. The runner explicitly selects DSPy's `litellm` engine, which completed a direct local chat test and the KGGen run below. The original MINE evaluator is separate: upstream `_1_evaluation.py` configures `openai/gpt-5` and requires `OPENAI_API_KEY`; local graph generation alone does not produce a paper-comparable MINE score. The published dataset includes essays, generated queries, and reference KG/evaluation fields, but this setup does not run or substitute for the hosted evaluator.
 
@@ -67,7 +73,7 @@ On 2026-10-04, the pinned tags were screened on MINE record 24 using KGGen 0.4.0
 | Ministral 3 3B Q4_K_M | Passed | 341.0 s | 4107 / 8192 MiB | 10.9 / 15 GiB | No model-specific options. |
 | Phi-4-mini 3.8B Q4_K_M | Passed | 65.8 s | 3694 / 8192 MiB | 11.0 / 15 GiB | No model-specific options. |
 
-All four completed candidates fit within the 8 GiB VRAM and 16 GiB system RAM ceilings in this screening. These results confirm compatibility only on record 24; run the same fixed 10 records per selected model before comparing reliability or quality. The benchmark host reported Ollama server version 0.32.15. New run settings also record the server version. The run-specific settings, model digests, graphs, logs, and resource measurements are in the ignored `runs/` directory on the benchmark machine.
+All four completed candidates fit within the 8 GiB VRAM and 16 GiB system RAM ceilings in this screening. The full fixed 10-record pilot results are summarized below. The benchmark host reported Ollama server version 0.32.15. Run settings record the server version; run-specific settings, model digests, graphs, logs, and resource measurements are in the ignored `runs/` directory on the benchmark machine.
 
 To repeat a one-record check with peak sampling:
 
@@ -76,6 +82,29 @@ uv run scripts/run_pilot.py --model qwen3.5:4b-q4_K_M --limit 1
 uv run scripts/run_pilot.py --model gemma4:e2b-it-q4_K_M --limit 1
 uv run scripts/run_pilot.py --model ministral-3:3b-instruct-2512-q4_K_M --limit 1
 uv run scripts/run_pilot.py --model phi4-mini:3.8b-q4_K_M --limit 1
+```
+
+### CAT-78 Full Pilot Results
+
+On 2026-10-04, all four compatibility-screened models were run on the same 10 records with KGGen 0.4.0, chunk size 3000, `cluster=True`, temperature 0, seed 42, 4096-token context, and DSPy `litellm` engine. Qwen3.5 used the previously established `think=false` option. Each run wrote per-record extraction graphs, final graphs where clustering succeeded, settings, timing/resource manifests, KGGen logs, and full error logs for failures under ignored `runs/`.
+
+| Model | Succeeded | Failed | Mean seconds/record | Total record time | Peak GPU | Peak system memory |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Ministral 3 3B Q4_K_M | 8/10 | 2 | 325.2 s | 54.2 min | 4147 / 8192 MiB | 11.09 / 15 GiB |
+| Gemma 4 E2B Q4_K_M | 9/10 | 1 | 294.9 s | 49.1 min | 3670 / 8192 MiB | 11.31 / 15 GiB |
+| Phi-4-mini 3.8B Q4_K_M | 10/10 | 0 | 118.8 s | 19.8 min | 3704 / 8192 MiB | 11.48 / 15 GiB |
+| Qwen3.5 4B Q4_K_M | 8/10 | 2 | 206.7 s | 34.4 min | 4406 / 8192 MiB | 11.82 / 15 GiB |
+
+Peak GPU and system figures are global samples taken once per second; system-memory values are host-wide, not process-only. The listed total is the sum of per-record elapsed time, excluding setup and cleanup. All four models stayed within the 8 GiB VRAM and 16 GiB system RAM ceilings. Failure records were Ministral 7 and 70, Gemma 40, and Qwen3.5 40 and 37. They remain represented by `record_ID.json`, intermediate extraction graphs, and `error_ID.log`; failures were not retried manually or silently dropped. Phi-4-mini was the only model to complete clustering on all 10 records.
+
+The observed failures were DSPy `AdapterParseError`s from model responses that violated KGGen's strict structured-output literals. Ministral failed during edge clustering on records 7 and 70; Gemma failed during clustering on record 40; Qwen3.5 failed during extraction on records 40 and 37. These are operational success results, not a quality ranking. The original MINE evaluator requires `openai/gpt-5` and `OPENAI_API_KEY`; no MINE scores or paper-comparable quality claims were produced. DSPy 3.4.0's default budget is three transient request retries; the runner records this setting for new runs and replays. Detailed per-record retry counts are not exposed by the pinned DSPy/LiteLLM integration, so none are inferred from the logs.
+
+During diagnosis, KGGen 0.4.0's clustering loop was found to reset its no-progress counter when a nonempty validated cluster contained only items already removed from the remaining set. A stale model suggestion could therefore prevent the configured no-progress limit from firing. The runner now intersects suggested and validated clusters with remaining items before accepting progress and falls back to KGGen's existing batch path after the limit. A regression test covers the stale-suggestion case. This guard does not suppress model parse failures; it bounds the stale-response loop while preserving unclustered items.
+
+Reproduce a full run from its recorded settings (use the appropriate run directory):
+
+```bash
+uv run scripts/run_pilot.py --settings runs/cat78-phi4-full-phi4-mini-3.8b-q4_K_M/settings.json
 ```
 
 ## Evaluation
@@ -106,7 +135,7 @@ The benchmark should leave enough information for another person to repeat and i
 - Intermediate extractions, final graphs, evaluation outputs, resource measurements, and error logs, organized by run/model.
 - A comparison report that states the evaluator used, methodology deviations, model exclusions, quality/resource trade-offs, recommendation, and full-benchmark decision.
 
-Acceptance target: evaluate at least three compatible models, or document why fewer qualify; use the same 10 records for each; make successful runs reproducible from pinned configuration; and report quality, runtime, memory, and failures. No benchmark results are claimed here until runs have actually been completed.
+The CAT-78 pilot execution is complete for four compatible models on the same 10 records. Runtime, memory, success, and failure results are reported above. Quality evaluation remains open: the original hosted evaluator was not run, and no substitute evaluator was introduced, so these execution results do not establish relative graph quality.
 
 ## References
 
