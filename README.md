@@ -125,7 +125,7 @@ If the published evaluation depends on an inaccessible hosted model, keep two re
 
 Manually inspect representative graphs for incorrect entity merges, missing relationships, and unsupported extractions. Preserve failed outputs and logs; do not silently omit unsuccessful runs from comparisons.
 
-The completed CAT-80 comparison is in [reports/cat80-evaluation.md](reports/cat80-evaluation.md). It separates the unavailable original MINE evaluation from a local Qwen2.5-judged comparison and reports operational metrics, graph-size/clustering measurements, failures, manual inspection, and a bounded recommendation. Recompute operational summaries with `uv run scripts/summarize_runs.py RUN_DIR...`; reproduce the local judgment with `uv run scripts/evaluate_local.py RUN_DIR... --run-id RUN_ID` after installing the recorded evaluator model in Ollama. Local judgments are not paper-comparable MINE scores.
+The completed CAT-80 comparison is in [reports/cat80-evaluation.md](reports/cat80-evaluation.md). It reports the upstream MINE retrieval-QA results on the fixed 10-record pilot, separately labeled local judgments, operational and graph-size/clustering measurements, failures, and a bounded recommendation. Reproduce the original-procedure pilot against saved graphs with `uv run scripts/evaluate_mine_saved_graphs.py RUN_DIR... --run-id RUN_ID --resume` after providing `OPENAI_API_KEY` to the process. Per-answer judgments and retrieved contexts are preserved under ignored `runs/`; API token/cost telemetry was not captured. Recompute operational summaries with `uv run scripts/summarize_runs.py RUN_DIR...`; reproduce the local judgment with `uv run scripts/evaluate_local.py RUN_DIR... --run-id RUN_ID` after installing the recorded evaluator model in Ollama. Local judgments are not paper-comparable MINE scores.
 
 ## Reproducibility and Deliverables
 
@@ -137,7 +137,7 @@ The benchmark should leave enough information for another person to repeat and i
 - Intermediate extractions, final graphs, evaluation outputs, resource measurements, and error logs, organized by run/model.
 - A comparison report that states the evaluator used, methodology deviations, model exclusions, quality/resource trade-offs, recommendation, and full-benchmark decision.
 
-The CAT-78 pilot execution and a separate CAT-80 local-judge evaluation are complete for four compatible models on the same 10 records. The original hosted MINE evaluator was not run, so no paper-comparable MINE score or validated relative-quality conclusion is available. The local-judge ranking is provisional and its limitations and recommendation are documented in the CAT-80 report.
+The CAT-78 pilot execution, CAT-80 original-procedure MINE retrieval-QA pilot, and separate local-judge evaluation are complete for four compatible models on the same 10 records. The original procedure was applied to saved graphs for the sampled subset only; the full 101-record MINE evaluation remains unrun. The report documents this scope, the local-judge limitations, and the recommendation.
 
 ## References
 
