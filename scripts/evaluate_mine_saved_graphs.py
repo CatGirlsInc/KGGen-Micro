@@ -113,26 +113,37 @@ def main():
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--max-graphs", type=int)
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--cohort", type=Path)
     args = parser.parse_args()
 
     if not os.environ.get("OPENAI_API_KEY"):
         raise RuntimeError("OPENAI_API_KEY must be set in the process environment")
 
-    pilot = json.loads(PILOT.read_text(encoding="utf-8"))
-    if pilot["dataset"] != DATASET or pilot["revision"] != DATASET_REVISION:
-        raise ValueError("Local pilot dataset does not match the pinned MINE revision")
-    selected_ids = [record["id"] for record in pilot["records"]]
-
     manifests = [
         json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
         for run_dir in args.run_dirs
     ]
+    cohort_path = args.cohort or Path(manifests[0].get("cohort_manifest", PILOT))
+    cohort = json.loads(cohort_path.read_text(encoding="utf-8"))
+    if cohort.get("dataset") != DATASET or cohort.get("revision") != DATASET_REVISION:
+        raise ValueError("Cohort does not match the pinned MINE dataset revision")
+    selected_ids = cohort.get(
+        "record_ids", [record["id"] for record in cohort.get("records", [])]
+    )
+    if (
+        not selected_ids
+        or any(type(record_id) is not int for record_id in selected_ids)
+        or len(selected_ids) != len(set(selected_ids))
+    ):
+        raise ValueError("Cohort contains invalid record IDs")
     for manifest in manifests:
         if (
             manifest.get("dataset") != DATASET
             or manifest.get("dataset_revision") != DATASET_REVISION
         ):
             raise ValueError("Every run must use the pinned MINE dataset revision")
+        if manifest.get("record_ids") != selected_ids:
+            raise ValueError("Every candidate run must use the exact cohort record IDs")
 
     dataset = load_dataset(DATASET, revision=DATASET_REVISION, split="train")
     reference_by_id = {
@@ -175,6 +186,9 @@ def main():
             "upstream_revision": UPSTREAM_REVISION,
             "dataset": DATASET,
             "dataset_revision": DATASET_REVISION,
+            "cohort_manifest": str(cohort_path),
+            "cohort_selection_seed": cohort.get("selection_seed"),
+            "cohort_selection_procedure": cohort.get("selection_procedure"),
             "record_ids": selected_ids,
             "evaluator_model": "openai/gpt-5",
             "evaluator_reasoning_effort": "high",

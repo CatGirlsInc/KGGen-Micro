@@ -31,6 +31,29 @@ def ollama_json(host, path, body=None, timeout=10):
         return json.load(response)
 
 
+def load_cohort(path):
+    cohort = json.loads(path.read_text(encoding="utf-8"))
+    records = cohort.get("records")
+    if not isinstance(records, list) or not records:
+        raise ValueError("Cohort must contain at least one record")
+    record_ids = [record.get("id") for record in records]
+    if (
+        any(type(record_id) is not int for record_id in record_ids)
+        or len(record_ids) != len(set(record_ids))
+        or any(
+            not isinstance(record.get("topic"), str)
+            or not isinstance(record.get("text"), str)
+            or not record["text"].strip()
+            for record in records
+        )
+    ):
+        raise ValueError("Cohort contains invalid or duplicate records")
+    declared_ids = cohort.get("record_ids", record_ids)
+    if declared_ids != record_ids:
+        raise ValueError("Cohort record_ids do not match its records")
+    return cohort
+
+
 def unload_ollama_model(host, model):
     return ollama_json(
         host,
@@ -38,6 +61,15 @@ def unload_ollama_model(host, model):
         {"model": model, "prompt": "", "stream": False, "keep_alive": 0},
         timeout=60,
     )
+
+
+def summarize_attempts(attempts):
+    return {
+        "attempts_used": len(attempts),
+        "record_retry_count": len(attempts) - 1,
+        "first_attempt_success": attempts[0]["status"] == "succeeded",
+        "final_success": attempts[-1]["status"] == "succeeded",
+    }
 
 
 def gpu_memory():
@@ -186,13 +218,24 @@ class ResourceMonitor:
             "minimum_system_available_kib": self.minimum_system_available_kib,
         }
 
+    def exceeded_limits(self, max_gpu_mib, max_system_memory_kib):
+        return bool(
+            (self.peak_gpu_used_mib or 0) > max_gpu_mib
+            or (self.peak_system_used_kib or 0) > max_system_memory_kib
+        )
+
 
 def main():
-    parser = argparse.ArgumentParser(description="Run the fixed MINE pilot locally")
+    parser = argparse.ArgumentParser(description="Run the fixed MINE benchmark cohort locally")
     parser.add_argument(
         "--model", help="Ollama model tag; defaults to KGGEN_MODEL or the pilot model"
     )
-    parser.add_argument("--limit", type=int, help="Run only the first N fixed pilot records")
+    parser.add_argument("--limit", type=int, help="Run only the first N cohort records")
+    parser.add_argument(
+        "--record-retries",
+        type=int,
+        help="Additional full-record pipeline attempts after the initial attempt",
+    )
     parser.add_argument("--run-id", help="Stable output directory name")
     parser.add_argument(
         "--cluster",
@@ -205,33 +248,39 @@ def main():
         type=Path,
         help="Replay model and parameters from a saved settings.json or run.json",
     )
+    parser.add_argument(
+        "--cohort",
+        type=Path,
+        help="Run the exact records in a cohort manifest (defaults to the 10-record pilot)",
+    )
     args = parser.parse_args()
 
-    pilot = json.loads(PILOT.read_text(encoding="utf-8"))
-    pilot_records = pilot["records"]
-    if len(pilot_records) != 10:
-        raise ValueError(f"Expected exactly 10 fixed records, found {len(pilot_records)}")
     saved_settings = (
         json.loads(args.settings.read_text(encoding="utf-8")) if args.settings else {}
     )
-    if args.settings and args.model:
-        parser.error("--model cannot be combined with --settings")
+    if args.settings and (args.model or args.cohort):
+        parser.error("--model and --cohort cannot be combined with --settings")
+    cohort_path = args.cohort or PILOT
+    if args.settings:
+        cohort_path = Path(saved_settings.get("cohort_manifest", PILOT))
+    pilot = load_cohort(cohort_path)
     if args.settings and (
-        saved_settings.get("dataset_revision") != pilot["revision"]
-        or saved_settings.get("dataset") != pilot["dataset"]
+        saved_settings.get("dataset_revision") != pilot.get("revision")
+        or saved_settings.get("dataset") != pilot.get("dataset")
     ):
-        raise ValueError("Saved settings refer to a different pilot dataset revision")
+        raise ValueError("Saved settings refer to a different dataset revision")
 
+    pilot_records = pilot["records"]
     if args.settings:
         saved_ids = saved_settings.get("record_ids")
         records_by_id = {record["id"]: record for record in pilot_records}
         if (
             not isinstance(saved_ids, list)
             or not saved_ids
-            or any(not isinstance(record_id, int) or record_id not in records_by_id for record_id in saved_ids)
+            or any(type(record_id) is not int or record_id not in records_by_id for record_id in saved_ids)
             or len(saved_ids) != len(set(saved_ids))
         ):
-            raise ValueError("Saved settings contain invalid pilot record IDs")
+            raise ValueError("Saved settings contain invalid cohort record IDs")
         records = [records_by_id[record_id] for record_id in saved_ids]
     else:
         records = pilot_records
@@ -242,6 +291,17 @@ def main():
     context_length = saved_settings.get("context_length", 4096)
     max_tokens = saved_settings.get("max_tokens", context_length)
     dspy_num_retries = saved_settings.get("dspy_num_retries", 3)
+    record_retries = (
+        args.record_retries
+        if args.record_retries is not None
+        else saved_settings.get("record_retries", 0)
+    )
+    if type(record_retries) is not int or record_retries < 0:
+        raise ValueError("record retries must be a nonnegative integer")
+    max_gpu_mib = saved_settings.get("max_gpu_mib")
+    max_system_memory_kib = saved_settings.get("max_system_memory_kib")
+    if (max_gpu_mib is None) != (max_system_memory_kib is None):
+        raise ValueError("both resource limits must be specified together")
     chunk_size = saved_settings.get("chunk_size", 3000)
     cluster = saved_settings.get("cluster", True) if args.cluster is None else args.cluster
     lm_options = saved_settings.get("model_specific_options")
@@ -277,7 +337,10 @@ def main():
     settings = {
         "dataset": pilot["dataset"],
         "dataset_revision": pilot["revision"],
-        "pilot_seed": pilot["seed"],
+        "pilot_seed": pilot.get("seed"),
+        "cohort_manifest": str(cohort_path),
+        "cohort_selection_seed": pilot.get("selection_seed"),
+        "cohort_selection_procedure": pilot.get("selection_procedure"),
         "record_ids": [record["id"] for record in records],
         "model": model,
         "model_digest": model_info.get("digest"),
@@ -288,6 +351,10 @@ def main():
         "context_length": context_length,
         "max_tokens": max_tokens,
         "dspy_num_retries": dspy_num_retries,
+        "record_retries": record_retries,
+        "max_gpu_mib": max_gpu_mib,
+        "max_system_memory_kib": max_system_memory_kib,
+        "retry_policy": saved_settings.get("retry_policy"),
         "chunk_size": chunk_size,
         "cluster": cluster,
         "dspy_engine": "litellm",
@@ -300,6 +367,7 @@ def main():
     (output / "settings.json").write_text(json.dumps(settings, indent=2) + "\n")
 
     outcomes = []
+    resource_limit_exceeded = False
     unload_status = "not_attempted"
     resource_monitor = ResourceMonitor()
     resource_monitor.start()
@@ -329,43 +397,83 @@ def main():
                 "topic": record["topic"],
                 "status": "failed",
             }
-            intermediate_dir = output / f"intermediate_{record['id']}"
-            try:
-                result["stage"] = "extraction"
-                extraction_started = time.perf_counter()
-                extracted_graph = kg.generate(
-                    input_data=record["text"],
-                    context=record["topic"],
-                    chunk_size=chunk_size,
-                    cluster=False,
-                    output_folder=str(intermediate_dir),
+            attempts = []
+            for attempt_number in range(1, record_retries + 2):
+                attempt_started = time.perf_counter()
+                attempt_dir = (
+                    output / "attempts" / f"record_{record['id']}" / f"attempt_{attempt_number}"
+                    if record_retries
+                    else output
                 )
-                result["extraction_elapsed_seconds"] = round(
-                    time.perf_counter() - extraction_started, 3
+                attempt_dir.mkdir(parents=True, exist_ok=True)
+                intermediate_dir = (
+                    attempt_dir / f"intermediate_{record['id']}"
+                    if record_retries
+                    else output / f"intermediate_{record['id']}"
                 )
-                result["intermediate"] = str(intermediate_dir / "graph.json")
-                if cluster:
-                    result["stage"] = "clustering"
-                    clustering_started = time.perf_counter()
-                    graph = kg.cluster(extracted_graph, context=record["topic"])
-                    result["clustering_elapsed_seconds"] = round(
-                        time.perf_counter() - clustering_started, 3
+                attempt_result = {"attempt": attempt_number, "status": "failed"}
+                try:
+                    attempt_result["stage"] = "extraction"
+                    extraction_started = time.perf_counter()
+                    extracted_graph = kg.generate(
+                        input_data=record["text"],
+                        context=record["topic"],
+                        chunk_size=chunk_size,
+                        cluster=False,
+                        output_folder=str(intermediate_dir),
                     )
-                else:
-                    graph = extracted_graph
-                graph_path = output / f"graph_{record['id']}.json"
-                graph_path.write_text(
-                    json.dumps(graph.model_dump(mode="json"), indent=2) + "\n",
-                    encoding="utf-8",
+                    attempt_result["extraction_elapsed_seconds"] = round(
+                        time.perf_counter() - extraction_started, 3
+                    )
+                    attempt_result["intermediate"] = str(intermediate_dir / "graph.json")
+                    if cluster:
+                        attempt_result["stage"] = "clustering"
+                        clustering_started = time.perf_counter()
+                        graph = kg.cluster(extracted_graph, context=record["topic"])
+                        attempt_result["clustering_elapsed_seconds"] = round(
+                            time.perf_counter() - clustering_started, 3
+                        )
+                    else:
+                        graph = extracted_graph
+                    attempt_graph = attempt_dir / f"graph_{record['id']}.json"
+                    attempt_graph.write_text(
+                        json.dumps(graph.model_dump(mode="json"), indent=2) + "\n",
+                        encoding="utf-8",
+                    )
+                    attempt_result["status"] = "succeeded"
+                    attempt_result.pop("stage")
+                    attempt_result["graph"] = str(attempt_graph)
+                except Exception as error:
+                    attempt_result["error"] = f"{type(error).__name__}: {error}"
+                    error_path = attempt_dir / f"error_{record['id']}.log"
+                    error_path.write_text(traceback.format_exc(), encoding="utf-8")
+                    attempt_result["error_log"] = str(error_path)
+                attempt_result["elapsed_seconds"] = round(
+                    time.perf_counter() - attempt_started, 3
                 )
-                result["status"] = "succeeded"
-                result.pop("stage")
-                result["graph"] = graph_path.name
-            except Exception as error:
-                result["error"] = f"{type(error).__name__}: {error}"
-                (output / f"error_{record['id']}.log").write_text(
-                    traceback.format_exc(), encoding="utf-8"
-                )
+                attempts.append(attempt_result)
+                if max_gpu_mib is not None and resource_monitor.exceeded_limits(
+                    max_gpu_mib, max_system_memory_kib
+                ):
+                    resource_limit_exceeded = True
+                    attempt_result["resource_limit_exceeded"] = True
+                if attempt_result["status"] == "succeeded":
+                    final_graph = output / f"graph_{record['id']}.json"
+                    if record_retries:
+                        final_graph.write_text(
+                            Path(attempt_result["graph"]).read_text(encoding="utf-8"),
+                            encoding="utf-8",
+                        )
+                    result.update(
+                        status="succeeded",
+                        graph=final_graph.name,
+                        intermediate=attempt_result["intermediate"],
+                    )
+                    break
+                if resource_limit_exceeded:
+                    break
+            result["attempts"] = attempts
+            result.update(summarize_attempts(attempts))
             result["elapsed_seconds"] = round(time.perf_counter() - started, 3)
             result["process_peak_rss_kib"] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
             result["gpu_memory_mib"] = gpu_memory()
@@ -374,6 +482,9 @@ def main():
             )
             outcomes.append(result)
             print(f"record {record['id']}: {result['status']} ({result['elapsed_seconds']}s)")
+            if resource_limit_exceeded:
+                print("Resource ceiling exceeded; aborting remaining records")
+                break
     finally:
         try:
             unload_ollama_model(host, model)
@@ -392,11 +503,12 @@ def main():
         "attempted": len(outcomes),
         "succeeded": sum(item["status"] == "succeeded" for item in outcomes),
         "failed": sum(item["status"] == "failed" for item in outcomes),
+        "resource_limit_exceeded": resource_limit_exceeded,
         "outcomes": outcomes,
     }
     (output / "run.json").write_text(json.dumps(summary, indent=2) + "\n")
     print(f"Run artifacts: {output}")
-    if summary["failed"] or unload_status != "succeeded":
+    if summary["failed"] or unload_status != "succeeded" or resource_limit_exceeded:
         raise SystemExit(1)
 
 

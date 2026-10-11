@@ -1,0 +1,23 @@
+{
+  "dataset": "josancamon/kg-gen-MINE-evaluation-dataset",
+  "dataset_revision": "aacf51485de5cb6f4a411599f1d0846842c14009",
+  "cohort_manifest": "data/cat114-development-cohort.json",
+  "record_ids": [24, 7, 102, 40, 52, 37, 70, 26, 101, 96, 44, 6, 64, 35, 22, 42, 13, 32, 46, 100],
+  "model": "qwen3.5:4b-q4_K_M",
+  "model_digest": "d8b0f5e9760cd1682034f292d7ef72ec46f432149be0df7574bf2d6e92e38c04",
+  "temperature": 0,
+  "seed": 42,
+  "context_length": 8192,
+  "max_tokens": 8192,
+  "dspy_num_retries": 3,
+  "record_retries": 2,
+  "chunk_size": 3000,
+  "cluster": true,
+  "dspy_engine": "litellm",
+  "model_specific_options": {
+    "think": false
+  },
+  "max_gpu_mib": 8192,
+  "max_system_memory_kib": 16777216,
+  "retry_policy": "Initial full record pipeline plus at most two additional full pipeline attempts at unchanged settings; no manual rescue. DSPy request retries remain 3 and are not counted as record retries."
+}

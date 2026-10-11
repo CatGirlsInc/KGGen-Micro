@@ -1,0 +1,22 @@
+{
+  "dataset": "josancamon/kg-gen-MINE-evaluation-dataset",
+  "dataset_revision": "aacf51485de5cb6f4a411599f1d0846842c14009",
+  "cohort_manifest": "data/cat114-development-cohort.json",
+  "record_ids": [40],
+  "model": "phi4-mini:3.8b-q4_K_M",
+  "model_digest": "78fad5d182a7c33065e153a5f8ba210754207ba9d91973f57dffa7f487363753",
+  "temperature": 0,
+  "seed": 42,
+  "context_length": 8192,
+  "max_tokens": 8192,
+  "dspy_num_retries": 3,
+  "record_retries": 0,
+  "chunk_size": 3000,
+  "cluster": true,
+  "dspy_engine": "litellm",
+  "model_specific_options": {},
+  "max_gpu_mib": 8192,
+  "max_system_memory_kib": 15625000,
+  "experiment": "Audit-only matched-configuration supplement; excluded from all CAT-114 reliability metrics",
+  "retry_policy": "One full-record attempt only; this supplemental attempt is for preparing a matched audit artifact and is not included in development or held-out success rates."
+}
