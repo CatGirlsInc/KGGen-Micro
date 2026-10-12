@@ -6,7 +6,7 @@
 
 ## Frozen Cohort
 
-The checked-in manifest is [data/mine-confirmation-cohort.json](../data/mine-confirmation-cohort.json). The first ten IDs preserve the original pilot order; ten unused IDs were selected by `random.Random(20261008).sample(remaining_ids, 10)` in dataset order and appended:
+The generated local manifest is `data/mine-confirmation-cohort.json`, created by `uv run scripts/prepare_pilot.py` followed by `uv run scripts/prepare_confirmation_cohort.py`. Dataset-derived JSON files are ignored and not distributed. The first ten IDs preserve the original pilot order; ten unused IDs were selected by `random.Random(20261008).sample(remaining_ids, 10)` in dataset order and appended:
 
 `24, 7, 102, 40, 52, 37, 70, 26, 101, 96, 44, 6, 64, 35, 22, 42, 13, 32, 46, 100`
 
@@ -135,10 +135,11 @@ Do not launch the 101-record benchmark. Phi-4-mini remains the more reliable of 
 
 ## Reproduction
 
-Create the locked environment and regenerate/validate the cohort:
+Create the locked environment and regenerate the local, ignored cohort files:
 
 ```bash
 uv sync --locked
+uv run scripts/prepare_pilot.py
 uv run scripts/prepare_confirmation_cohort.py
 ```
 

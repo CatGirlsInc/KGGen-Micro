@@ -153,6 +153,7 @@ activemq-data/
 .env
 .envrc
 .venv
+.vscode/mcp.json
 env/
 venv/
 ENV/
@@ -162,6 +163,10 @@ venv.bak/
 # Local benchmark downloads, caches, and generated run artifacts
 /data/downloads/
 /data/cache/
+/data/mine-pilot.json
+/data/mine-confirmation-cohort.json
+/data/cat114-development-cohort.json
+/data/cat114-heldout-cohort.json
 /outputs/
 /runs/
 

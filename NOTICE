@@ -1,0 +1,24 @@
+Third-party acknowledgments
+
+KGGen
+KGGen is a separate project by the KGGen authors and is used as the pinned
+kg-gen==0.4.0 dependency. Its upstream repository describes the project as
+MIT-licensed. This acknowledgment does not relicense KGGen. See:
+https://github.com/stair-lab/kg-gen
+
+Paper citation
+Belinda Mo, Kyssen Yu, Joshua Kazdan, Proud Mpala, Lisa Yu, Charilaos
+Kanatsoulis, and Sanmi Koyejo. "KGGen: Extracting Knowledge Graphs from Plain
+Text with Language Models." Advances in Neural Information Processing Systems
+38, 2025. https://doi.org/10.52202/085713-1010
+
+MINE evaluation dataset
+The experiment references josancamon/kg-gen-MINE-evaluation-dataset at revision
+
+aacf51485de5cb6f4a411599f1d0846842c14009:
+https://huggingface.co/datasets/josancamon/kg-gen-MINE-evaluation-dataset/tree/aacf51485de5cb6f4a411599f1d0846842c14009
+
+The dataset card at that revision does not specify a license. Dataset-derived
+JSON fixtures under data/, including essay text and selection manifests, are
+excluded from the KGGen-Micro MIT License. Confirm rights before redistributing
+those data.
